@@ -10,7 +10,6 @@ class AssistantScreen extends StatelessWidget {
     required this.onMinimize,
     this.isAvaSpeaking = false,
     this.onViewData,
-    this.onTestStt,
   });
 
   final String lastTranscript;
@@ -18,7 +17,6 @@ class AssistantScreen extends StatelessWidget {
   final VoidCallback onMinimize;
   final bool isAvaSpeaking;
   final VoidCallback? onViewData;
-  final VoidCallback? onTestStt;
 
   @override
   Widget build(BuildContext context) {
@@ -104,12 +102,6 @@ class AssistantScreen extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              if (onTestStt != null)
-                IconButton(
-                  onPressed: onTestStt,
-                  icon: Icon(Icons.science, color: Colors.white.withValues(alpha: 0.8)),
-                  tooltip: 'Testar STT',
-                ),
               if (onViewData != null)
                 IconButton(
                   onPressed: onViewData,

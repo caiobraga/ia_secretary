@@ -40,7 +40,6 @@ dependencies:
   # Vosk: reconhecimento local offline (usando modelo pequeno com correção robusta)
   # whisper_flutter_new removido - muito lento para mobile
   record: ^6.0.0
-  audioplayers: ^6.1.0
   path_provider: ^2.1.5
   flutter_tts: ^4.2.0
 

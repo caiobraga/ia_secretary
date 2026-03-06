@@ -20,7 +20,6 @@ import 'src/overlay_permission_screen.dart';
 import 'src/reminder_notification_service.dart';
 import 'src/secretary_service.dart';
 import 'src/speech_feedback.dart';
-import 'src/stt_test_screen.dart';
 import 'src/voice_commands.dart';
 
 /// Quando o Android abre a Activity pelo full-screen intent, chama showAssistant; o app reage aqui.
@@ -311,11 +310,6 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
                         isAvaSpeaking: _avaSpeaking,
                         onMinimize: () => setState(() => _assistantVisible = false),
                         onViewData: () => setState(() => _showDataVisualization = true),
-                        onTestStt: () {
-                          _navigatorKey.currentState?.push(
-                            MaterialPageRoute(builder: (_) => const SttTestScreen()),
-                          );
-                        },
                       )
                     else
                       _TransparentHome(),
