@@ -38,9 +38,12 @@ dependencies:
   # Vosk: reconhecimento local sem beep (fallback)
   vosk_flutter_service: ^0.0.6
   # Vosk: reconhecimento local offline (usando modelo pequeno com correção robusta)
-  # whisper_flutter_new removido - muito lento para mobile
+  # Whisper removido: libwhisper.so causava crash em vários dispositivos. Use Vosk (sem beep).
   record: ^6.0.0
   path_provider: ^2.1.5
+  # TFLite Audio (fork local compatível com Flutter atual)
+  tflite_audio:
+    path: packages/tflite_audio
   flutter_tts: ^4.2.0
 
   # Supabase backend (voice_transcripts, calendars, events, etc.)
@@ -86,8 +89,11 @@ flutter:
 
   assets:
     - .env
-    # Service account key para Google Cloud Speech-to-Text (não commitar; ver README)
+    - assets/tflite_audio_labels.txt
+    # Para USE_TFLITE_AUDIO=true: adicione - assets/tflite_audio_model.tflite (exporte do Teachable Machine)
     - ia-rag-473917-94c6821ccc2d.json
+    # Modelo Vosk PT pré-instalado (reconhecimento de voz offline). Se o zip estiver aqui, o app não baixa na primeira vez.
+    - assets/models/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

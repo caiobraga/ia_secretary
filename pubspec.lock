@@ -877,6 +877,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.7.7"
+  tflite_audio:
+    dependency: "direct main"
+    description:
+      path: "packages/tflite_audio"
+      relative: true
+    source: path
+    version: "0.3.0"
   timezone:
     dependency: transitive
     description:

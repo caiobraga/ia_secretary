@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io';
+
+import 'src/platform_stub.dart' if (dart.library.io) 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -86,6 +87,8 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
   final List<Map<String, String>> _commandResults = [];
   bool _loadingVoskModel = false;
   String? _loadingVoskMessage;
+  /// Último comando executado (para contexto: "cancela a primeira" só após listar eventos).
+  VoiceCommandType? _lastExecutedCommandType;
   /// True enquanto a Ava está falando (TTS); nesse período a escuta fica pausada.
   bool _avaSpeaking = false;
 
@@ -94,7 +97,10 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _voiceService = SecretaryVoiceService(
-      // Usando Vosk com correção robusta de erros para português
+      localeId: 'pt_BR',
+      preferSystemSpeechToText: dotenv.env['USE_SYSTEM_SPEECH_TO_TEXT'] == 'true',
+      preferWhisperStt: dotenv.env['USE_WHISPER_STT'] == 'true',
+      useTfliteAudio: dotenv.env['USE_TFLITE_AUDIO'] == 'true',
       onWakeWordDetected: _onWakeWord,
       onTranscript: _onTranscript,
       onLoadingModel: (isLoading, message) {
@@ -164,7 +170,8 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
     }
     setState(() => _lastTranscript = text);
     if (isFinal && text.trim().isNotEmpty) {
-      final cmd = parseCommand(text);
+      final context = VoiceCommandContext(lastCommandType: _lastExecutedCommandType);
+      final cmd = parseCommand(text, context: context);
       if (cmd.type == VoiceCommandType.exitAssistant && _assistantVisible) {
         setState(() {
           _assistantVisible = false;
@@ -182,10 +189,17 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
         return;
       }
       if (cmd.type != VoiceCommandType.unknown && _assistantVisible) {
+        if (!commandMakesSense(cmd)) {
+          const msg = 'Ava: não dá para agendar ou remarcar para uma data no passado.';
+          setState(() => _commandResults.insert(0, {'label': 'Data inválida', 'result': msg}));
+          unawaited(_speakThenResumeListening(msg));
+          return;
+        }
         final isViewCalendar = cmd.type == VoiceCommandType.viewCalendar;
         AssistantActions.execute(cmd).then((result) async {
           if (mounted) {
             setState(() {
+              _lastExecutedCommandType = cmd.type;
               _commandResults.insert(0, {
                 'label': commandTypeLabel(cmd.type),
                 'result': result,

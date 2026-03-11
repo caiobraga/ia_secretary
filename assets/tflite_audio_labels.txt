@@ -1,0 +1,11 @@
+background
+ava
+secretaria
+reunioes
+calendario
+sair
+notas
+criar reuniao
+clima
+horas
+menu

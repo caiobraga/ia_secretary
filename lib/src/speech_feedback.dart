@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io';
+import 'platform_stub.dart' if (dart.library.io) 'dart:io' show Platform;
 
 import 'package:flutter_tts/flutter_tts.dart';
 
