@@ -38,6 +38,7 @@ After sign-in you see the transparent “listening” screen and the app starts 
 
 - **`lib/src/config.dart`** – `supabaseUrl` and `supabaseAnonKey`. Your URL and the key you shared are already set as defaults. If Supabase rejects requests, switch to the **anon** JWT from the dashboard.
 - **`.env`** – Variáveis de ambiente (na raiz do projeto). Ex.: `GOOGLE_CLOUD_SPEECH_API_KEY` para usar a API em nuvem e evitar o beep. Use `.env.example` como modelo.
+- **STT remoto local (recomendado para melhor qualidade)** – veja `stt_server/README.md` e configure `USE_REMOTE_STT=true` + `REMOTE_STT_URL`.
 
 ## Permissions
 

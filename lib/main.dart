@@ -9,10 +9,14 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 import 'src/app_foreground.dart';
 import 'src/assistant_actions.dart';
 import 'src/assistant_screen.dart';
+import 'src/remote_listen_indicator.dart';
+import 'src/remote_listen_ui_state.dart';
 import 'src/auth_screen.dart';
 import 'src/config.dart';
 import 'src/data_visualization_screen.dart';
@@ -25,6 +29,30 @@ import 'src/voice_commands.dart';
 
 /// Quando o Android abre a Activity pelo full-screen intent, chama showAssistant; o app reage aqui.
 final ValueNotifier<bool> showAssistantFromNative = ValueNotifier(false);
+
+/// Segundos de áudio por requisição ao STT remoto (1–15). Menor = texto aparece mais cedo.
+double _parseRemoteSttChunkSeconds(String? raw) {
+  final v = double.tryParse(raw ?? '');
+  // Padrão menor = texto aparece mais cedo (mais requisições ao servidor).
+  if (v == null || v.isNaN) return 1.5;
+  return v.clamp(1.0, 15.0);
+}
+
+/// Timeout HTTP do STT remoto (45–600 s). Primeira transcrição no servidor pode levar minutos (baixar modelo).
+int _parseRemoteSttTimeoutSeconds(String? raw) {
+  final v = int.tryParse(raw ?? '');
+  if (v == null) return 180;
+  return v.clamp(45, 600);
+}
+
+/// Token OAuth para Google Cloud STT (novo nome ou legado GOOGLE_CLOUD_SPEECH_API_KEY).
+String? _googleCloudSpeechToken() {
+  final a = dotenv.env['GOOGLE_CLOUD_SPEECH_ACCESS_TOKEN']?.trim();
+  if (a != null && a.isNotEmpty) return a;
+  final b = dotenv.env['GOOGLE_CLOUD_SPEECH_API_KEY']?.trim();
+  if (b != null && b.isNotEmpty) return b;
+  return null;
+}
 
 // Top-level callback for foreground task (required by plugin).
 @pragma('vm:entry-point')
@@ -46,9 +74,22 @@ class SecretaryTaskHandler extends TaskHandler {
   void onReceiveData(Object data) {}
 }
 
+void _initAppTimezone() {
+  try {
+    tzdata.initializeTimeZones();
+    final raw = dotenv.env['APP_TIMEZONE']?.trim();
+    final name = (raw != null && raw.isNotEmpty) ? raw : 'America/Sao_Paulo';
+    tz.setLocalLocation(tz.getLocation(name));
+    debugLog('App', 'timezone local: $name');
+  } catch (e) {
+    debugLog('App', 'timezone init failed: $e');
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: '.env', isOptional: true);
+  _initAppTimezone();
   debugLog('App', 'Supabase initializing...');
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   debugLog('App', 'Supabase initialized');
@@ -91,6 +132,8 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
   VoiceCommandType? _lastExecutedCommandType;
   /// True enquanto a Ava está falando (TTS); nesse período a escuta fica pausada.
   bool _avaSpeaking = false;
+  /// Feedback visual do STT remoto (gravando / transcrevendo).
+  RemoteListenUiState? _remoteListenUi;
 
   @override
   void initState() {
@@ -99,15 +142,32 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
     _voiceService = SecretaryVoiceService(
       localeId: 'pt_BR',
       preferSystemSpeechToText: dotenv.env['USE_SYSTEM_SPEECH_TO_TEXT'] == 'true',
-      preferWhisperStt: dotenv.env['USE_WHISPER_STT'] == 'true',
+      preferGoogleCloudStt: dotenv.env['USE_GOOGLE_CLOUD_STT'] == 'true',
+      googleCloudAccessToken: _googleCloudSpeechToken(),
+      googleCloudSpeechLanguage: dotenv.env['GOOGLE_CLOUD_SPEECH_LANGUAGE'] ?? 'pt-BR',
+      preferRemoteStt: dotenv.env['USE_REMOTE_STT'] == 'true',
+      remoteSttDeferUntilWakeWord: dotenv.env['REMOTE_STT_AFTER_WAKE_WORD'] == 'true',
+      remoteSttUrl: dotenv.env['REMOTE_STT_URL'],
+      remoteSttToken: dotenv.env['REMOTE_STT_TOKEN'],
+      remoteSttLanguage: dotenv.env['REMOTE_STT_LANGUAGE'] ?? 'pt',
+      remoteSttPrompt: dotenv.env['REMOTE_STT_PROMPT'],
+      remoteSttVadFilter: dotenv.env['REMOTE_STT_VAD_FILTER'] != 'false',
+      remoteSttChunkSeconds: _parseRemoteSttChunkSeconds(dotenv.env['REMOTE_STT_CHUNK_SECONDS']),
+      remoteSttTimeoutSeconds: _parseRemoteSttTimeoutSeconds(dotenv.env['REMOTE_STT_TIMEOUT_SECONDS']),
       useTfliteAudio: dotenv.env['USE_TFLITE_AUDIO'] == 'true',
       onWakeWordDetected: _onWakeWord,
       onTranscript: _onTranscript,
       onLoadingModel: (isLoading, message) {
-        if (mounted) setState(() {
-          _loadingVoskModel = isLoading;
-          _loadingVoskMessage = message;
-        });
+        if (mounted) {
+          setState(() {
+            _loadingVoskModel = isLoading;
+            _loadingVoskMessage = message;
+          });
+        }
+      },
+      onRemoteListenUi: (state) {
+        if (!mounted) return;
+        setState(() => _remoteListenUi = state);
       },
     );
     _reminderService = ReminderNotificationService();
@@ -255,8 +315,11 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
 
   Future<void> _requestPermissions() async {
     await Permission.microphone.request();
-    if (Platform.isAndroid) {
+    if (Platform.isAndroid || Platform.isIOS) {
       await Permission.notification.request();
+    }
+    if (Platform.isAndroid) {
+      await ReminderNotificationService.requestAndroidExactAlarmsPermission();
     }
   }
 
@@ -324,9 +387,22 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
                         isAvaSpeaking: _avaSpeaking,
                         onMinimize: () => setState(() => _assistantVisible = false),
                         onViewData: () => setState(() => _showDataVisualization = true),
+                        remoteListen: _voiceService.engine == 'remote' ? _remoteListenUi : null,
                       )
                     else
                       _TransparentHome(),
+                    if (_voiceService.engine == 'remote' &&
+                        _remoteListenUi != null &&
+                        _remoteListenUi!.phase != RemoteListenPhase.idle &&
+                        !_assistantVisible &&
+                        !_avaSpeaking &&
+                        !_showDataVisualization)
+                      Positioned(
+                        left: 16,
+                        right: 16,
+                        bottom: 28,
+                        child: RemoteListenOverlayChip(state: _remoteListenUi!),
+                      ),
                     if (_loadingVoskModel)
                       _VoskLoadingOverlay(message: _loadingVoskMessage),
                   ],

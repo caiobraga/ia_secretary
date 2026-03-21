@@ -76,6 +76,12 @@ String _normalize(String s) {
 /// Ex.: "quais reuniões atenção" → "quais reuniões tenho"
 String _fixCommonSttErrors(String s) {
   String result = s;
+  // Vosk estica vogais: "reuniaoo" → "reuniao"
+  result = result.replaceAllMapped(RegExp(r'reunia(o{2,})'), (_) => 'reuniao');
+  // "marco" por "marca" (imperativo); evita confundir com o mês "de marco"
+  result = result.replaceAll(RegExp(r'\bmarco\s+uma\s+reuniao\b'), 'marca uma reuniao');
+  result = result.replaceAll(RegExp(r'\bmarco\s+um\s+reuniao\b'), 'marca um reuniao');
+  result = result.replaceAll(RegExp(r'\bmarco\s+uma\s+reunia\b'), 'marca uma reuniao');
   // Primeiro: separar palavras "coladas" (fala rápida)
   result = _fixMergedWords(result);
   // Aplica correções em ordem de prioridade (frases longas primeiro)
@@ -183,6 +189,9 @@ final _sttFixes = <MapEntry<String, String>>[
   MapEntry('reuni ao', 'reuniao'),
   MapEntry('re uniao', 'reuniao'),
   MapEntry('reunio', 'reuniao'),
+  // "reunioes" contém "reunio"; sem isto vira "reuniaoes" e depois "reunia"→"reuniao" vira "reuniaooes".
+  MapEntry('reuniaoes', 'reunioes'),
+  MapEntry('reuniaooes', 'reunioes'),
   MapEntry('reu niao', 'reuniao'),
   MapEntry('reuiniao', 'reuniao'),
   MapEntry('reuniaos', 'reunioes'),
@@ -190,12 +199,12 @@ final _sttFixes = <MapEntry<String, String>>[
   MapEntry('reunioes', 'reunioes'),
   MapEntry('re unioes', 'reunioes'),
   MapEntry('reunio es', 'reunioes'),
-  MapEntry('reuniaoes', 'reunioes'),
   MapEntry('reunioas', 'reunioes'),
   MapEntry('reuniaoz', 'reunioes'),
   MapEntry('reunioz', 'reunioes'),
-  MapEntry('reunioe', 'reunioes'),
+  // Não usar só "reunioe" → "reunioes": isso casa com o prefixo de "reunioes" e vira "reunioess".
   MapEntry('reunioe s', 'reunioes'),
+  MapEntry('reunioess', 'reunioes'),
   MapEntry('retinas', 'reunioes'),
   MapEntry('reunioes tenho', 'reunioes tenho'),
   MapEntry('minha reuniao', 'minha reuniao'),
@@ -811,6 +820,30 @@ String? _extractMeetingTitleForNotes(String normalized) {
   return null;
 }
 
+/// Extrai título do evento em "lembretes da reunião X", "ler lembretes do evento Y".
+String? _extractEventTitleForReminders(String normalized) {
+  const prefixes = [
+    'lembretes da reuniao ', 'lembretes do evento ', 'lembretes do compromisso ',
+    'lembrete da reuniao ', 'lembrete do evento ',
+    'reminders da reuniao ', 'reminders do evento ',
+    'lembretes para a reuniao ', 'lembretes para o evento ',
+    'quais lembretes da reuniao ', 'quais lembretes do evento ',
+    'quais lembretes tem o evento ', 'quais lembretes tem a reuniao ',
+    'ler lembretes da reuniao ', 'ler lembretes do evento ',
+    'ler os lembretes da reuniao ', 'ler os lembretes do evento ',
+    'ler lembrete da reuniao ', 'mostrar lembretes da reuniao ', 'ver lembretes da reuniao ',
+    'lembretes do evento chamado ',
+  ];
+  for (final prefix in prefixes) {
+    if (normalized.contains(prefix)) {
+      final start = normalized.indexOf(prefix) + prefix.length;
+      final rest = normalized.substring(start).trim();
+      if (rest.length > 1) return rest.split(RegExp(r'\s+')).take(8).join(' ').trim();
+    }
+  }
+  return null;
+}
+
 /// Extrai título do evento para cancelar/remarcar (ex: "cancela o evento dentista" -> dentista).
 String? _extractEventTitleForAction(String normalized, {required bool forReschedule}) {
   // "cancela o evento X" / "cancela a reunião X" / "remarca o evento X para ..."
@@ -864,7 +897,60 @@ Map<String, String>? _extractDateTimeParams(String raw) {
 bool isWakeWord(String text) {
   if (text.trim().isEmpty) return false;
   final n = _normalize(text);
-  return n.contains('ava') || n.contains('secretaria');
+  if (n.contains('ava') || n.contains('secretaria')) return true;
+  // Vosk/STT local costuma confundir "Ava" com sílabas parecidas (frases curtas = ativação).
+  if (n.length <= 24) {
+    if (n == 'aba' ||
+        n == 'hava' ||
+        n == 'o ava' ||
+        n == 'oi ava' ||
+        n == 'ea va' ||
+        n.startsWith('aba ') ||
+        n.endsWith(' aba')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// STT costuma cortar o verbo: "marca uma reunião para mim amanhã" → "uma reuniaoo para todos".
+bool _looksLikeImplicitScheduleMeeting(String n) {
+  if (!n.contains('reunio') && !n.contains('reuni')) return false;
+  if (n.contains('ver ') ||
+      n.contains('quais ') ||
+      n.contains('qual ') ||
+      n.contains('listar') ||
+      n.contains('lista ') ||
+      n.contains('mostrar') ||
+      n.contains('mostra ') ||
+      n.contains('cancela') ||
+      n.contains('cancelar') ||
+      n.contains('remarca') ||
+      n.contains('remarcar') ||
+      n.contains('lembrete') ||
+      n.contains('nota da reuniao') ||
+      n.contains('notas da reuniao')) {
+    return false;
+  }
+  // "tenho X reuniões" é listagem, não agendar
+  if (n.contains('tenho') && (n.contains('quais') || n.contains('que ') || n.contains('o que'))) {
+    return false;
+  }
+  final hasMeetingNoun = n.contains('uma reunio') || n.contains('um reunio') || n.contains('uns reunio');
+  if (!hasMeetingNoun) return false;
+  final hasScheduleHint = n.contains('para ') ||
+      n.contains('amanha') ||
+      n.contains('hoje') ||
+      n.contains('depois de amanha') ||
+      RegExp(r'\d').hasMatch(n) ||
+      n.contains(' as ') ||
+      n.contains(' meio') ||
+      n.contains('quinze horas') ||
+      n.contains('catorze horas') ||
+      n.contains('quatorze horas') ||
+      n.contains('meia hora') ||
+      n.contains('dia ');
+  return hasScheduleHint;
 }
 
 /// Reconhece comandos como "crie uma reunião", "tome notas", "marque evento amanhã às 15h", etc.
@@ -877,6 +963,10 @@ VoiceCommand parseCommand(String text, {VoiceCommandContext? context}) {
   final createMeetingTrigger = (n.contains('cria') || n.contains('crie') || n.contains('criar') || n.contains('nova reuniao') || n.contains('fazer reuniao') || n.contains('abrir reuniao') || n.contains('marque uma call') || n.contains('marcar call') || n.contains('agende uma call'));
   final hasMeetingWord = n.contains('reunio') || n.contains('reuni') || n.contains('call') || n.contains('daily') || n.contains('stand up') || n.contains('standup');
   if (createMeetingTrigger && hasMeetingWord) {
+    final params = _extractDateTimeParams(text);
+    return VoiceCommand(type: VoiceCommandType.createMeeting, raw: text, params: params);
+  }
+  if (_looksLikeImplicitScheduleMeeting(n)) {
     final params = _extractDateTimeParams(text);
     return VoiceCommand(type: VoiceCommandType.createMeeting, raw: text, params: params);
   }
@@ -910,7 +1000,8 @@ VoiceCommand parseCommand(String text, {VoiceCommandContext? context}) {
       n.contains('compromisso') || n.contains('agenda') ||
       n.contains('listar evento') || n.contains('mostrar evento') || n.contains('lista evento') || n.contains('lista reuniao') || n.contains('listar reuniao') ||
       n.contains('quero ver reunio') || n.contains('quero ver evento') || n.contains('quero ver agenda') || n.contains('me mostra reunio') || n.contains('me mostra evento') || n.contains('me mostra agenda') ||
-      n.contains('pode mostrar reunio') || n.contains('pode mostrar agenda') || n.contains('preciso ver reunio') || n.contains('preciso ver agenda') || n.contains('queria ver reunio') || n.contains('queria ver agenda');
+      n.contains('pode mostrar reunio') || n.contains('pode mostrar agenda') || n.contains('preciso ver reunio') || n.contains('preciso ver agenda') || n.contains('queria ver reunio') || n.contains('queria ver agenda') ||
+      ((n.contains('verifique') || n.contains('verifica')) && (n.contains('reunio') || n.contains('reunia') || n.contains('evento') || n.contains('agenda') || n.contains('compromisso')));
   final hasDateRef = n.contains('amanha') || n.contains('hoje') || n.contains('dia ') ||
       n.contains('segunda') || n.contains('terca') || n.contains('quarta') || n.contains('quinta') || n.contains('sexta') || n.contains('sabado') || n.contains('domingo') ||
       n.contains('feira');
@@ -929,8 +1020,14 @@ VoiceCommand parseCommand(String text, {VoiceCommandContext? context}) {
   if (hasListEventsToday) {
     return VoiceCommand(type: VoiceCommandType.listEvents, raw: text, params: {'query_date_iso': _defaultToday()});
   }
-  // "marca/marque uma reunião", "agendar reunião" (STT: marca, marque, marcar + reuniao)
-  if ((n.contains('marque') || n.contains('marca') || n.contains('marcar') || n.contains('agendar reuniao') || n.contains('agende reuniao')) && (n.contains('reunio') || n.contains('reuni'))) {
+  // "marca/marque uma reunião", "agendar reunião" (STT: marca, marque, marcar + reuniao; "marco" = marca)
+  if ((n.contains('marque') ||
+          n.contains('marca') ||
+          n.contains('marcar') ||
+          (n.contains('marco') && !n.contains('de marco')) ||
+          n.contains('agendar reuniao') ||
+          n.contains('agende reuniao')) &&
+      (n.contains('reunio') || n.contains('reuni'))) {
     final params = _extractDateTimeParams(text);
     return VoiceCommand(type: VoiceCommandType.createMeeting, raw: text, params: params);
   }
@@ -1015,6 +1112,31 @@ VoiceCommand parseCommand(String text, {VoiceCommandContext? context}) {
   final hasMeetingRef = n.contains('reunio') || n.contains('reunia') || n.contains('evento') || n.contains('compromisso') || n.contains('agenda');
   if (hasWeekQuery && (hasListIntent || hasMeetingRef)) {
     return VoiceCommand(type: VoiceCommandType.listMeetingsThisWeek, raw: text);
+  }
+  // Lembretes de um evento ("lembretes da reunião orçamento", "ler lembretes do evento") — antes da lista genérica
+  final reminderEventTitle = _extractEventTitleForReminders(n);
+  if (reminderEventTitle != null && reminderEventTitle.isNotEmpty) {
+    return VoiceCommand(type: VoiceCommandType.listReminders, raw: text, params: {'event_title': reminderEventTitle});
+  }
+  if ((n.contains('lembrete') || n.contains('reminder')) &&
+      !n.contains('criar lembrete') &&
+      !n.contains('crie lembrete') &&
+      !n.contains('agendar lembrete') &&
+      !n.contains('me lembre') &&
+      !n.contains('lembre me')) {
+    if ((n.contains('lembretes') || n.contains('lembrete')) &&
+        (n.contains('dessa reuniao') || n.contains('nessa reuniao') || n.contains('essa reuniao') || n.contains('dessa reunia') || n.contains('nessa reunia')) &&
+        (context == null || context.lastWasListingEvents)) {
+      final which = n.contains('segunda') || n.contains('segundo') ? 'second' : 'first';
+      return VoiceCommand(type: VoiceCommandType.listReminders, raw: text, params: {'which_listed': which});
+    }
+    if ((n.contains('lembretes') || n.contains('lembrete')) &&
+        (n.contains('primeira') || n.contains('segunda') || n.contains('primeiro') || n.contains('segundo')) &&
+        (n.contains('reuniao') || n.contains('evento')) &&
+        (context == null || context.lastWasListingEvents)) {
+      final which = n.contains('segunda') || n.contains('segundo') ? 'second' : 'first';
+      return VoiceCommand(type: VoiceCommandType.listReminders, raw: text, params: {'which_listed': which});
+    }
   }
   // "lembretes", "quais lembretes", "meus lembretes", "criar lembrete", "me lembre", "lembre me"
   if (n.contains('lembrete') || n.contains('lembretes') || n.contains('meus lembretes') || n.contains('quais lembretes') || n.contains('tem lembrete') ||

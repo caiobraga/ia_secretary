@@ -7,6 +7,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'debug_log.dart';
+import 'remote_listen_ui_state.dart';
 import 'voice_commands.dart';
 
 /// Sends transcribed speech to Supabase `voice_transcripts` table.
@@ -42,7 +43,18 @@ class SecretaryVoiceService {
     String? voskModelUrl,
     this.voskModelAsset,
     this.preferSystemSpeechToText = false,
-    this.preferWhisperStt = false,
+    this.preferGoogleCloudStt = false,
+    this.googleCloudAccessToken,
+    this.googleCloudSpeechLanguage = 'pt-BR',
+    this.preferRemoteStt = false,
+    this.remoteSttDeferUntilWakeWord = false,
+    this.remoteSttUrl,
+    this.remoteSttToken,
+    this.remoteSttLanguage = 'pt',
+    this.remoteSttPrompt,
+    this.remoteSttVadFilter = true,
+    this.remoteSttChunkSeconds = 2.0,
+    this.remoteSttTimeoutSeconds = 180,
     this.useTfliteAudio = false,
     this.tfliteModelAsset = 'assets/tflite_audio_model.tflite',
     this.tfliteLabelAsset = 'assets/tflite_audio_labels.txt',
@@ -50,6 +62,11 @@ class SecretaryVoiceService {
     this.onWakeWordDetected,
     this.onTranscript,
     this.onLoadingModel,
+    this.onRemoteListenUi,
+    this.remoteSttMaxSegmentSeconds = 15,
+    this.remoteSttSilenceEndMs = 700,
+    this.remoteSttMinSegmentMs = 400,
+    this.remoteSttMaxLeadSilenceMs = 12000,
   }) : _api = apiClient ?? SecretarySupabaseClient();
 
   final SecretarySupabaseClient _api;
@@ -57,9 +74,26 @@ class SecretaryVoiceService {
   final VoidCallback? onWakeWordDetected;
   final void Function(String text, bool isFinal)? onTranscript;
   final void Function(bool isLoading, String? message)? onLoadingModel;
+  final void Function(RemoteListenUiState state)? onRemoteListenUi;
   final String? voskModelAsset;
   final bool preferSystemSpeechToText;
-  final bool preferWhisperStt;
+  final bool preferGoogleCloudStt;
+  final String? googleCloudAccessToken;
+  final String googleCloudSpeechLanguage;
+  final bool preferRemoteStt;
+  final bool remoteSttDeferUntilWakeWord;
+  final String? remoteSttUrl;
+  final String? remoteSttToken;
+  final String remoteSttLanguage;
+  final String? remoteSttPrompt;
+  final bool remoteSttVadFilter;
+  final double remoteSttMaxSegmentSeconds;
+  final int remoteSttSilenceEndMs;
+  final int remoteSttMinSegmentMs;
+  final int remoteSttMaxLeadSilenceMs;
+  @Deprecated('Use remoteSttMaxSegmentSeconds')
+  final double remoteSttChunkSeconds;
+  final int remoteSttTimeoutSeconds;
   final bool useTfliteAudio;
   final String tfliteModelAsset;
   final String tfliteLabelAsset;
@@ -71,7 +105,7 @@ class SecretaryVoiceService {
   String _engine = 'stt';
   Future<bool>? _initFuture;
 
-  static const Duration _commitDelayPartial = Duration(milliseconds: 4500);
+  static const Duration _commitDelayPartialStt = Duration(milliseconds: 4000);
   DateTime? _wakeWordCooldownUntil;
   static const Duration _wakeWordCooldown = Duration(seconds: 5);
   String _phraseBuffer = '';
@@ -97,14 +131,6 @@ class SecretaryVoiceService {
     return _initFuture!;
   }
 
-  void _onStatus(String status) {
-    if (_isListening && !_isStopped && (status == 'done' || status == 'notListening')) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (_isListening && !_isStopped) _listen();
-      });
-    }
-  }
-
   void startListening() {
     if (_isListening || _isStopped) return;
     _isListening = true;
@@ -117,11 +143,12 @@ class SecretaryVoiceService {
     _stt.listen(
       onResult: (result) => _handleTranscript(result.recognizedWords.trim(), result.finalResult),
       listenFor: const Duration(seconds: 120),
-      pauseFor: const Duration(seconds: 20),
+      pauseFor: const Duration(seconds: 4),
       localeId: localeId,
       listenOptions: SpeechListenOptions(
         partialResults: true,
         listenMode: ListenMode.dictation,
+        onDevice: true,
         cancelOnError: false,
         enableHapticFeedback: false,
       ),
@@ -139,19 +166,26 @@ class SecretaryVoiceService {
         _wakeWordCooldownUntil = DateTime.now().add(_wakeWordCooldown);
       }
     }
-    _phraseBuffer = t;
     if (isFinal) {
       _commitTimer?.cancel();
+      _phraseBuffer = t;
       _commitPhraseWith(t);
     } else {
+      final changed = t != _phraseBuffer;
+      _phraseBuffer = t;
       onTranscript?.call(t, false);
-      _commitTimer?.cancel();
-      _commitTimer = Timer(_commitDelayPartial, () => _commitPhraseWith(_phraseBuffer));
+      if (changed) {
+        _commitTimer?.cancel();
+        _commitTimer = Timer(_commitDelayPartialStt, () => _commitPhraseWith(_phraseBuffer));
+      } else if (_commitTimer == null) {
+        _commitTimer = Timer(_commitDelayPartialStt, () => _commitPhraseWith(_phraseBuffer));
+      }
     }
   }
 
   void _commitPhraseWith(String text) {
     _commitTimer?.cancel();
+    _commitTimer = null;
     final phrase = text.trim();
     _phraseBuffer = '';
     if (phrase.isEmpty || !_isListening || _isStopped) return;
@@ -169,10 +203,15 @@ class SecretaryVoiceService {
   bool _looksLikeShortCommand(String phrase) {
     final n = phrase.toLowerCase().trim();
     return n == 'sair' || n == 'fechar' || n == 'clima' || n == 'menu' || n == 'horas' ||
-        n == 'voltar' || n == 'minimizar' || n == 'ava' || n == 'secretaria' ||
-        n == 'quais' || n == 'reunioes' || n == 'agenda' || n == 'notas' || n == 'calendario' ||
-        n == 'lembretes' || n == 'hoje' || n == 'amanha' || n == 'criar' || n == 'marque' ||
-        n == 'cancelar' || n == 'anotar' || n == 'tome notas';
+        n == 'voltar' || n == 'tchau' || n == 'minimizar' || n == 'ava' || n == 'secretaria' ||
+        n == 'quais' || n == 'quais as' || n == 'quais reunioes' || n == 'quais lembretes' ||
+        n == 'que horas' || n == 'lista' || n == 'listar' || n == 'mostre' || n == 'mostrar' || n == 'ver' ||
+        n == 'reunioes' || n == 'reuniao' || n == 'agenda' || n == 'notas' || n == 'calendario' ||
+        n == 'lembretes' || n == 'lembrete' || n == 'compromissos' || n == 'eventos' ||
+        n == 'hoje' || n == 'amanha' || n == 'essa semana' || n == 'minha agenda' ||
+        n == 'o que tenho' || n == 'que tenho' || n == 'tenho hoje' || n == 'tenho amanha' ||
+        n == 'criar' || n == 'marque' || n == 'agende' || n == 'cancelar' || n == 'remarcar' ||
+        n == 'anotar' || n == 'tome notas' || n == 'participantes' || n == 'daily' || n == 'stand up';
   }
 
   Future<void> stopListening() async {

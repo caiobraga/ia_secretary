@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'remote_listen_indicator.dart';
+import 'remote_listen_ui_state.dart';
+
 /// Tela futurista da IA: mostra último comando de voz e resultados.
 /// [isAvaSpeaking]: true quando a Ava está falando (TTS) — mostra animação de fala e para de ouvir.
 class AssistantScreen extends StatelessWidget {
@@ -10,6 +13,7 @@ class AssistantScreen extends StatelessWidget {
     required this.onMinimize,
     this.isAvaSpeaking = false,
     this.onViewData,
+    this.remoteListen,
   });
 
   final String lastTranscript;
@@ -17,6 +21,7 @@ class AssistantScreen extends StatelessWidget {
   final VoidCallback onMinimize;
   final bool isAvaSpeaking;
   final VoidCallback? onViewData;
+  final RemoteListenUiState? remoteListen;
 
   @override
   Widget build(BuildContext context) {
@@ -148,6 +153,8 @@ class AssistantScreen extends StatelessWidget {
               ),
             ),
           ),
+          if (remoteListen != null && !isAvaSpeaking)
+            RemoteListenIndicator(state: remoteListen!),
           const SizedBox(height: 8),
           Container(
             width: double.infinity,

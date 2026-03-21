@@ -74,7 +74,8 @@ create table public.reminders (
   event_id uuid references public.events(id) on delete cascade,
   remind_at timestamptz not null,
   method text default 'notification',
-  description text
+  description text,
+  relembrado boolean not null default false
 );
 
 alter table public.reminders enable row level security;

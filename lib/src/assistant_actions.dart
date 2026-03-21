@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'debug_log.dart';
+import 'reminder_rich_context.dart';
 import 'voice_commands.dart';
 
 /// Executa ações no Supabase a partir de comandos de voz (calendário, eventos, notas).
@@ -159,7 +160,7 @@ class AssistantActions {
       if (events.isEmpty) {
         lastListedEventTitles = [];
         final label = _dateLabel(queryDateIso);
-        return 'Ava: você não tem eventos $label.';
+        return 'Ava: sua agenda $label está livre — não há eventos marcados. Quer marcar algo?';
       }
       final phrases = <String>[];
       lastListedEventTitles = [];
@@ -171,11 +172,11 @@ class AssistantActions {
         phrases.add(timeStr.isEmpty ? title : '$title às $timeStr');
       }
       final label = _dateLabel(queryDateIso);
-      const alternatives = ' Posso cancelar, remarcar ou ler as notas de algum. O que deseja?';
+      const alternatives = ' Posso cancelar, remarcar, ler notas ou lembrar dos lembretes. O que prefere?';
       if (phrases.length == 1) {
-        return 'Ava: você tem 1 evento $label: ${phrases.first}.$alternatives';
+        return 'Ava: na sua agenda $label, você tem um compromisso: ${phrases.first}.$alternatives';
       }
-      return 'Ava: você tem ${phrases.length} eventos $label: ${phrases.join(', ')}.$alternatives';
+      return 'Ava: na sua agenda $label, você tem ${phrases.length} compromissos: ${phrases.join(', ')}.$alternatives';
     } catch (e) {
       debugLog('Assistant', 'listEvents: $e');
       return 'Ava não conseguiu consultar os eventos.';
@@ -319,7 +320,7 @@ class AssistantActions {
   /// Resposta conversacional: o que a Ava pode fazer (opções disponíveis).
   static Future<String> getWhatCanDoSpeech() async {
     return 'Ava: você pode me pedir para listar eventos por dia ou semana, cancelar ou remarcar um evento, '
-        'ver lembretes e eventos com notas. Posso ler as notas de uma reunião, listar itens de ação e contatos. '
+        'ver lembretes e eventos com notas, ou os lembretes de um evento específico. Posso ler as notas de uma reunião, listar itens de ação e contatos. '
         'Também marco reuniões, anoto o que você disser, digo as horas e o clima. '
         'Diga por exemplo: quais reuniões tive essa semana, ou: notas da reunião orçamento. O que deseja?';
   }
@@ -348,7 +349,7 @@ class AssistantActions {
       final events = list as List;
       if (events.isEmpty) {
         lastListedEventTitles = [];
-        return 'Ava: você não tem reuniões marcadas essa semana.';
+        return 'Ava: esta semana está livre — sem reuniões marcadas. Quer agendar alguma?';
       }
       final phrases = <String>[];
       lastListedEventTitles = [];
@@ -360,9 +361,9 @@ class AssistantActions {
         phrases.add(timeStr.isEmpty ? title : '$title às $timeStr');
       }
       if (phrases.length == 1) {
-        return 'Ava: você teve 1 reunião essa semana: ${phrases.first}. Quer que eu leia as notas dessa reunião?';
+        return 'Ava: nesta semana você tem uma reunião marcada: ${phrases.first}. Quer que eu leia as notas ou os lembretes?';
       }
-      return 'Ava: você teve ${phrases.length} reuniões essa semana: ${phrases.join(', ')}. Quer que eu leia as notas de alguma reunião?';
+      return 'Ava: nesta semana você tem ${phrases.length} reuniões: ${phrases.join(', ')}. Quer notas ou lembretes de alguma?';
     } catch (e) {
       debugLog('Assistant', 'listMeetingsThisWeek: $e');
       return 'Ava não conseguiu listar as reuniões da semana.';
@@ -403,6 +404,86 @@ class AssistantActions {
     }
   }
 
+  /// Lembretes ligados a um evento (por título ou à primeira/segunda da última lista).
+  static Future<String> readRemindersForEvent(String meetingTitle, {String? whichListed}) async {
+    final uid = _userId;
+    if (uid == null) return 'Ava: faça login para ver lembretes.';
+    var title = meetingTitle.trim();
+    if (title.isEmpty && whichListed != null && lastListedEventTitles.isNotEmpty) {
+      final idx = whichListed == 'second' && lastListedEventTitles.length > 1 ? 1 : 0;
+      title = lastListedEventTitles[idx];
+    }
+    if (title.isEmpty) {
+      return 'Ava: diga de qual reunião ou evento quer os lembretes. Por exemplo: lembretes da reunião orçamento.';
+    }
+    try {
+      final titleNorm = _normalizeForMatch(title);
+      final eventsList = await Supabase.instance.client
+          .from('events')
+          .select('id, title')
+          .eq('user_id', uid)
+          .eq('status', 'scheduled')
+          .order('start_time', ascending: false);
+      final events = eventsList as List;
+      String? eventId;
+      String? matchedTitle;
+      for (final e in events) {
+        final t = _normalizeForMatch(e['title'] as String? ?? '');
+        if (t.contains(titleNorm) || titleNorm.contains(t) || t == titleNorm) {
+          eventId = e['id'] as String?;
+          matchedTitle = e['title'] as String?;
+          break;
+        }
+      }
+      if (eventId == null) return 'Ava: não encontrei o evento "$title".';
+      final list = await Supabase.instance.client
+          .from('reminders')
+          .select('id, remind_at, description, relembrado')
+          .eq('event_id', eventId)
+          .order('remind_at', ascending: true);
+      final rows = list as List;
+      if (rows.isEmpty) {
+        return 'Ava: não há lembretes para o evento "$matchedTitle".';
+      }
+      final parts = <String>[];
+      for (final r in rows) {
+        final at = r['remind_at'] as String?;
+        final timeStr = at != null ? _formatTimeForSpeech(at) : '';
+        final desc = r['description'] as String?;
+        final label = desc?.trim().isNotEmpty == true ? desc! : 'Lembrete';
+        final when = at != null ? _reminderWhenPhrase(at) : '';
+        final done = r['relembrado'] as bool? ?? false;
+        final suffix = done ? ', já avisado' : ', pendente';
+        parts.add(when.isEmpty
+            ? (timeStr.isEmpty ? '$label$suffix' : '$label às $timeStr$suffix')
+            : '$label, $when$suffix');
+      }
+      if (parts.length == 1) {
+        return 'Ava: para "$matchedTitle", um lembrete: ${parts.first}.';
+      }
+      return 'Ava: para "$matchedTitle", ${parts.length} lembretes: ${parts.join('; ')}.';
+    } catch (e) {
+      debugLog('Assistant', 'readRemindersForEvent: $e');
+      return 'Ava não conseguiu buscar os lembretes desse evento.';
+    }
+  }
+
+  static String _reminderWhenPhrase(String remindAtIso) {
+    try {
+      final dt = DateTime.parse(remindAtIso).toLocal();
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final d = DateTime(dt.year, dt.month, dt.day);
+      final timeStr = _formatTimeForSpeech(remindAtIso);
+      if (d == today) return 'hoje às $timeStr';
+      final tomorrow = today.add(const Duration(days: 1));
+      if (d == tomorrow) return 'amanhã às $timeStr';
+      return 'dia ${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')} às $timeStr';
+    } catch (_) {
+      return '';
+    }
+  }
+
   /// Lista lembretes do usuário (próximos 7 dias) para falar.
   static Future<String> listReminders() async {
     final uid = _userId;
@@ -412,22 +493,30 @@ class AssistantActions {
       final later = DateTime.now().add(const Duration(days: 7)).toUtc().toIso8601String();
       final list = await Supabase.instance.client
           .from('reminders')
-          .select('id, remind_at, description, event_id, events(title)')
+          .select('id, remind_at, description, event_id, relembrado, events!inner(title, user_id)')
+          .eq('events.user_id', uid)
+          .eq('relembrado', false)
           .gte('remind_at', now)
           .lte('remind_at', later)
           .order('remind_at', ascending: true)
           .limit(20);
       final reminders = list as List;
-      if (reminders.isEmpty) return 'Ava: você não tem lembretes nos próximos 7 dias.';
+      if (reminders.isEmpty) {
+        return 'Ava: você não tem lembretes pendentes nos próximos 7 dias.';
+      }
       final phrases = <String>[];
       for (final r in reminders) {
         final at = r['remind_at'] as String?;
-        final timeStr = at != null ? _formatTimeForSpeech(at) : '';
         final desc = r['description'] as String?;
         final event = r['events'];
-        final title = event is Map ? (event['title'] as String?) : null;
-        final label = desc?.trim().isNotEmpty == true ? desc! : (title ?? 'Lembrete');
-        phrases.add(timeStr.isEmpty ? label : '$label às $timeStr');
+        final evTitle = event is Map ? (event['title'] as String?) : null;
+        final label = desc?.trim().isNotEmpty == true ? desc! : (evTitle ?? 'Lembrete');
+        if (at != null) {
+          final when = _reminderWhenPhrase(at);
+          phrases.add(when.isEmpty ? label : '$label, $when');
+        } else {
+          phrases.add(label);
+        }
       }
       const alternatives = ' Quer adiar algum ou que eu leia o evento relacionado?';
       if (phrases.length == 1) return 'Ava: você tem 1 lembrete: ${phrases.first}.$alternatives';
@@ -438,23 +527,105 @@ class AssistantActions {
     }
   }
 
-  /// Retorna lembretes que vencem nos próximos [withinMinutes] (para falar e notificar).
-  static Future<List<Map<String, dynamic>>> getUpcomingRemindersForNotification({int withinMinutes = 5}) async {
+  /// Garante [ReminderRichContext] mesmo se o JSON de [events] vier em formato inesperado ou embed incompleto.
+  static Future<ReminderRichContext?> loadReminderRichContext(Map<String, dynamic> row) async {
+    final sync = ReminderRichContext.fromReminderRow(row);
+    if (sync != null) return sync;
+    final eid = row['event_id'] as String?;
+    if (eid == null) return null;
+    final uid = _userId;
+    if (uid == null) return null;
+    try {
+      final data = await Supabase.instance.client
+          .from('events')
+          .select('id, title, description, start_time, end_time, location, event_participants(name, email, role)')
+          .eq('id', eid)
+          .eq('user_id', uid)
+          .maybeSingle();
+      if (data == null) return null;
+      return ReminderRichContext.fromEventMapAndReminder(
+        Map<String, dynamic>.from(data as Map),
+        row,
+      );
+    } catch (e) {
+      debugLog('Assistant', 'loadReminderRichContext: $e');
+      return null;
+    }
+  }
+
+  /// Lembretes com [remind_at] **já passou**, `relembrado = false`, e não mais antigos que [maxOverdueDays].
+  /// (A janela curta de 45 min fazia sumir o lembrete se você abrisse o app mais tarde.)
+  /// Lembretes ainda futuros vão para [getRemindersForFutureOsSchedule] (notificação agendada).
+  static Future<List<Map<String, dynamic>>> getUpcomingRemindersForNotification({int maxOverdueDays = 30}) async {
     final uid = _userId;
     if (uid == null) return [];
     try {
-      final now = DateTime.now().toUtc().toIso8601String();
-      final end = DateTime.now().add(Duration(minutes: withinMinutes)).toUtc().toIso8601String();
+      final now = DateTime.now().toUtc();
+      final pastLimit = now.subtract(Duration(days: maxOverdueDays));
       final list = await Supabase.instance.client
           .from('reminders')
-          .select('id, remind_at, description, event_id, events(title)')
-          .gte('remind_at', now)
-          .lte('remind_at', end)
+          .select(
+            'id, remind_at, description, event_id, relembrado, events!inner(id, title, description, user_id, start_time, end_time, location, event_participants(name, email, role))',
+          )
+          .eq('events.user_id', uid)
+          .eq('relembrado', false)
+          .lte('remind_at', now.toIso8601String())
+          .gte('remind_at', pastLimit.toIso8601String())
           .order('remind_at', ascending: true);
       return List<Map<String, dynamic>>.from(list as List);
     } catch (e) {
       debugLog('Assistant', 'getUpcomingReminders: $e');
       return [];
+    }
+  }
+
+  /// Lembretes futuros para [zonedSchedule] no [remind_at] exato.
+  static Future<List<Map<String, dynamic>>> getRemindersForFutureOsSchedule({
+    int maxDays = 14,
+    int limit = 48,
+  }) async {
+    final uid = _userId;
+    if (uid == null) return [];
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final end = DateTime.now().add(Duration(days: maxDays)).toUtc().toIso8601String();
+      final list = await Supabase.instance.client
+          .from('reminders')
+          .select(
+            'id, remind_at, description, event_id, relembrado, events!inner(id, title, description, user_id, start_time, end_time, location, event_participants(name, email, role))',
+          )
+          .eq('events.user_id', uid)
+          .eq('relembrado', false)
+          .gt('remind_at', now)
+          .lte('remind_at', end)
+          .order('remind_at', ascending: true)
+          .limit(limit);
+      return List<Map<String, dynamic>>.from(list as List);
+    } catch (e) {
+      debugLog('Assistant', 'getRemindersForFutureOsSchedule: $e');
+      return [];
+    }
+  }
+
+  /// Marca lembrete como já notificado. Retorna false se RLS não permitiu (ex.: event_id null).
+  static Future<bool> markReminderRelembrado(String reminderId) async {
+    if (_userId == null) return false;
+    try {
+      final res = await Supabase.instance.client
+          .from('reminders')
+          .update({'relembrado': true})
+          .eq('id', reminderId)
+          .select('id');
+      final ok = (res as List).isNotEmpty;
+      if (ok) {
+        debugLog('Assistant', 'relembrado ok: $reminderId');
+      } else {
+        debugLog('Assistant', 'relembrado: nenhuma linha atualizada (id=$reminderId)');
+      }
+      return ok;
+    } catch (e) {
+      debugLog('Assistant', 'markReminderRelembrado: $e');
+      return false;
     }
   }
 
@@ -779,6 +950,14 @@ class AssistantActions {
         if (title.isEmpty && whichListed == null) return 'Ava: diga qual evento remarcar. Ex.: remarca a primeira para amanhã às 15h.';
         return await rescheduleEvent(title, startIso, endIso, whichListed: whichListed);
       case VoiceCommandType.listReminders:
+        final eventTitle = p?['event_title'] ?? '';
+        final whichListed = p?['which_listed'];
+        if (eventTitle.trim().isNotEmpty) {
+          return await readRemindersForEvent(eventTitle.trim());
+        }
+        if (whichListed != null && (whichListed == 'first' || whichListed == 'second')) {
+          return await readRemindersForEvent('', whichListed: whichListed);
+        }
         return await listReminders();
       case VoiceCommandType.readMeetingNotes:
         final meetingTitle = p?['meeting_title'] ?? '';

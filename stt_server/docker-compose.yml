@@ -1,0 +1,52 @@
+services:
+  stt:
+    build: .
+    container_name: ia-secretary-stt
+    ports:
+      - "8000:8000"
+    # Transcrição longa: dá tempo de terminar antes do SIGKILL no `docker compose down`
+    stop_grace_period: 120s
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    environment:
+      # Modelo: small = bom PT-BR em CPU; medium = ainda melhor (mais lento/RAM)
+      MODEL_SIZE: ${MODEL_SIZE:-small}
+      MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
+      MODEL_COMPUTE_TYPE: ${MODEL_COMPUTE_TYPE:-int8}
+      # fast = menor latência (ideal com chunks no app); balanced/accurate = mais lento, mais preciso
+      STT_QUALITY_PROFILE: ${STT_QUALITY_PROFILE:-fast}
+      BEAM_SIZE: ${BEAM_SIZE:-}
+      BEST_OF: ${BEST_OF:-}
+      PATIENCE: ${PATIENCE:-}
+      CONDITION_ON_PREVIOUS_TEXT: ${CONDITION_ON_PREVIOUS_TEXT:-}
+      COMPRESSION_RATIO_THRESHOLD: ${COMPRESSION_RATIO_THRESHOLD:-}
+      LOG_PROB_THRESHOLD: ${LOG_PROB_THRESHOLD:-}
+      NO_SPEECH_THRESHOLD: ${NO_SPEECH_THRESHOLD:-}
+      VAD_PARAMETERS_JSON: ${VAD_PARAMETERS_JSON:-}
+      STT_HOTWORDS: ${STT_HOTWORDS:-}
+      PRELOAD_MODEL: ${PRELOAD_MODEL:-false}
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-pt}
+      DEFAULT_VAD_FILTER: ${DEFAULT_VAD_FILTER:-true}
+      API_TOKEN: ${API_TOKEN:-troque-este-token}
+      # Opcional: https://huggingface.co/settings/tokens — menos avisos e downloads mais rápidos no Hub
+      HF_TOKEN: ${HF_TOKEN:-}
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: ia-secretary-cloudflared
+    depends_on:
+      - stt
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    restart: unless-stopped
+    profiles:
+      - tunnel

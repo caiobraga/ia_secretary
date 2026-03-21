@@ -32,13 +32,17 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
+  # Google Cloud Speech (microfone direto → gRPC, sem beep do SpeechRecognizer do Android)
+  flutter_google_stt:
+    path: packages/flutter_google_stt
+
   # Always-on voice listening and API
   speech_to_text: ^7.0.0
   permission_handler: ^12.0.0
   # Vosk: reconhecimento local sem beep (fallback)
   vosk_flutter_service: ^0.0.6
   # Vosk: reconhecimento local offline (usando modelo pequeno com correção robusta)
-  # Whisper removido: libwhisper.so causava crash em vários dispositivos. Use Vosk (sem beep).
+  # Whisper on-device removido (crash). STT remoto: REMOTE_STT_URL → stt_server (faster-whisper); fase local: Vosk.
   record: ^6.0.0
   path_provider: ^2.1.5
   # TFLite Audio (fork local compatível com Flutter atual)
@@ -55,6 +59,7 @@ dependencies:
 
   # Notificações locais para lembretes
   flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
 
   # Clima e pesquisa (APIs externas)
   http: ^1.2.2
