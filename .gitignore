@@ -49,3 +49,7 @@ app.*.map.json
 
 # Google Cloud service account key (não commitar a chave)
 ia-rag-473917-94c6821ccc2d.json
+build/
+**/build/
+.dart_tool/
+*.apk
