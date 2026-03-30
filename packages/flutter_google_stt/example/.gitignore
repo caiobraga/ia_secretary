@@ -1,0 +1,3 @@
+# Build outputs (never commit — GitHub rejects >100MB)
+build/
+.dart_tool/
