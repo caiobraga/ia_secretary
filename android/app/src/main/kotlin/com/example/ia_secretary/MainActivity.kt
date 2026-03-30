@@ -27,7 +27,7 @@ import io.flutter.plugin.common.MethodChannel
 /**
  * Back and Home send the app to background instead of closing it.
  * bringToFront: no Android 10+ usa só full-screen intent para trazer o app ao frente.
- * Bolha flutuante (overlay do sistema): aparece sobre outros apps quando o app vai para o fundo.
+ * Bolha flutuante (overlay): aparece no onStop (app invisível), some no onStart ao voltar.
  */
 class MainActivity : FlutterActivity() {
 
@@ -82,16 +82,21 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    override fun onPause() {
-        super.onPause()
+    // Bolha só quando a Activity fica invisível (onPause sozinho dispara com diálogos e podia conflitar com onResume).
+    override fun onStop() {
         if (floatingBubbleEnabled && canDrawOverlays()) {
-            showOverlayBubble()
+            window?.decorView?.post { showOverlayBubble() } ?: showOverlayBubble()
         }
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        removeOverlayBubble()
     }
 
     override fun onResume() {
         super.onResume()
-        removeOverlayBubble()
         notifyAssistantIfNeeded(intent)
     }
 
@@ -121,8 +126,20 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun showOverlayBubble() {
-        if (overlayBubbleView != null || windowManager == null) return
+        if (windowManager == null) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        // Referência antiga: view já foi removida pelo sistema → recriar.
+        overlayBubbleView?.let { v ->
+            try {
+                if (v.parent == null) {
+                    removeOverlayBubble()
+                } else {
+                    return
+                }
+            } catch (_: Exception) {
+                removeOverlayBubble()
+            }
+        }
 
         val bubbleSizePx = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_DIP,
@@ -155,7 +172,10 @@ class MainActivity : FlutterActivity() {
             windowManager!!.addView(view, params)
             overlayBubbleView = view
             overlayParams = params
-        } catch (_: Exception) { }
+        } catch (_: Exception) {
+            overlayBubbleView = null
+            overlayParams = null
+        }
     }
 
     private fun dp(dp: Int): Int {
@@ -217,7 +237,14 @@ class MainActivity : FlutterActivity() {
                     if (kotlin.math.abs(dx) > 10 || kotlin.math.abs(dy) > 10) moved = true
                     p.x = initialX + dx.toInt()
                     p.y = initialY + dy.toInt()
-                    wm.updateViewLayout(overlayBubbleView, p)
+                    try {
+                        val bubble = overlayBubbleView
+                        if (bubble != null && bubble.parent != null) {
+                            wm.updateViewLayout(bubble, p)
+                        }
+                    } catch (_: Exception) {
+                        removeOverlayBubble()
+                    }
                 }
                 MotionEvent.ACTION_UP -> {
                     if (!moved) {

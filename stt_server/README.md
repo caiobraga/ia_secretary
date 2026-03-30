@@ -1,17 +1,28 @@
 # STT local (faster-whisper)
 
-Servico local de transcricao para usar no app com `USE_REMOTE_STT=true`.
+Servico local de transcricao para usar no app com `USE_REMOTE_STT=true`. O modelo é **Whisper** (via Hugging Face / faster-whisper), não Ollama.
 
 ## 1) Subir API local com Docker
 
 ```bash
 cd stt_server
 cp .env.example .env
+# Edite .env: API_TOKEN, e se for usar túnel, CLOUDFLARE_TUNNEL_TOKEN (nunca commite).
 # Recomendado: -d (detached). Sem -d, Ctrl+C para o container — não é “erro” da API.
 docker compose up -d --build stt
 docker compose ps
 docker compose logs -f --tail=50 stt
 ```
+
+Na **raiz** do repositório `ia_secretary` (outra máquina: clone do repo e mesmo `.env` em `stt_server/.env`):
+
+```bash
+docker compose --env-file stt_server/.env up -d --build stt
+# STT + Cloudflare Tunnel (perfil "tunnel"):
+docker compose --env-file stt_server/.env --profile tunnel up -d --build
+```
+
+O `--env-file` garante que `API_TOKEN` e `CLOUDFLARE_TUNNEL_TOKEN` do `stt_server/.env` entram na interpolação do Compose quando o comando não é executado dentro de `stt_server/`.
 
 Teste:
 
@@ -76,10 +87,17 @@ CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...
 3. Suba STT + tunnel:
 
 ```bash
+cd stt_server
 docker compose --profile tunnel up -d --build
 ```
 
-No Cloudflare, aponte o hostname para `http://stt:8000`.
+Ou, na raiz do repo:
+
+```bash
+docker compose --env-file stt_server/.env --profile tunnel up -d --build
+```
+
+No painel Cloudflare (ingress do túnel), a origem privada deve ser **`http://stt:8000`** (nome do serviço na rede Docker), não `http://localhost:8000`, porque o `cloudflared` roda no mesmo Compose e `localhost` seria o próprio container.
 
 ### Erro no cloudflared: `context canceled` / `Incoming request ended abruptly`
 

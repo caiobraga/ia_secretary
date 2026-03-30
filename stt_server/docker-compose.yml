@@ -4,6 +4,9 @@ services:
     container_name: ia-secretary-stt
     ports:
       - "8000:8000"
+    volumes:
+      # Persiste o download do modelo Whisper (Hugging Face) entre recriações do container
+      - hf_cache:/app/.cache/huggingface
     # Transcrição longa: dá tempo de terminar antes do SIGKILL no `docker compose down`
     stop_grace_period: 120s
     healthcheck:
@@ -15,7 +18,8 @@ services:
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      # 1.ª subida pode demorar (download HF + PRELOAD_MODEL=true)
+      start_period: 600s
     environment:
       # Modelo: small = bom PT-BR em CPU; medium = ainda melhor (mais lento/RAM)
       MODEL_SIZE: ${MODEL_SIZE:-small}
@@ -38,15 +42,20 @@ services:
       API_TOKEN: ${API_TOKEN:-troque-este-token}
       # Opcional: https://huggingface.co/settings/tokens — menos avisos e downloads mais rápidos no Hub
       HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /app/.cache/huggingface
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: ia-secretary-cloudflared
     depends_on:
-      - stt
+      stt:
+        condition: service_healthy
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     environment:
       CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     restart: unless-stopped
     profiles:
       - tunnel
+
+volumes:
+  hf_cache:
