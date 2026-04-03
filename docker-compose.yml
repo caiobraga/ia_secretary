@@ -1,9 +1,6 @@
-# STT + túnel Cloudflare — use a partir da raiz do repositório:
+# STT — a partir da raiz do repositório:
 #   cp stt_server/.env.example stt_server/.env
-#   # Edite stt_server/.env: API_TOKEN, CLOUDFLARE_TUNNEL_TOKEN (não commite)
-#   docker compose --profile tunnel up -d --build
-#
-# Só STT (sem túnel):
-#   docker compose up -d --build
+#   # Edite stt_server/.env: API_TOKEN (não commite)
+#   docker compose --env-file stt_server/.env up -d --build
 include:
   - path: stt_server/docker-compose.yml

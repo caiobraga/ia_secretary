@@ -7,7 +7,7 @@ Servico local de transcricao para usar no app com `USE_REMOTE_STT=true`. O model
 ```bash
 cd stt_server
 cp .env.example .env
-# Edite .env: API_TOKEN, e se for usar túnel, CLOUDFLARE_TUNNEL_TOKEN (nunca commite).
+# Edite .env: API_TOKEN (nunca commite).
 # Recomendado: -d (detached). Sem -d, Ctrl+C para o container — não é “erro” da API.
 docker compose up -d --build stt
 docker compose ps
@@ -18,11 +18,9 @@ Na **raiz** do repositório `ia_secretary` (outra máquina: clone do repo e mesm
 
 ```bash
 docker compose --env-file stt_server/.env up -d --build stt
-# STT + Cloudflare Tunnel (perfil "tunnel"):
-docker compose --env-file stt_server/.env --profile tunnel up -d --build
 ```
 
-O `--env-file` garante que `API_TOKEN` e `CLOUDFLARE_TUNNEL_TOKEN` do `stt_server/.env` entram na interpolação do Compose quando o comando não é executado dentro de `stt_server/`.
+O `--env-file` garante que `API_TOKEN` (e outras variáveis) do `stt_server/.env` entram na interpolação do Compose quando o comando não é executado dentro de `stt_server/`.
 
 Teste:
 
@@ -57,70 +55,24 @@ Se quiser, crie um token em [Hugging Face → Settings → Access Tokens](https:
 HF_TOKEN=hf_...
 ```
 
-## 2) Expor com Cloudflare Tunnel (opcional)
+## 2) DNS na Cloudflare apontando para a EC2 (sem Tunnel)
 
-Voce pode expor a API local para o celular fora da rede local sem abrir porta no roteador.
+Não há comando `git`/CLI obrigatório na Cloudflare depois do commit: o código só muda na VM (`git pull` + `docker compose up -d --build` no servidor).
 
-### Opcao A: Quick Tunnel (teste rapido)
+No **painel Cloudflare** (zona do domínio, ex. `anaaisecretary.com`):
 
-```bash
-docker run --rm --network host cloudflare/cloudflared:latest tunnel --url http://localhost:8000
-```
+1. **DNS → Records**
+   - Para o hostname do STT (ex. `audio`), crie ou edite um registo **A** com **IPv4 address** = **IP público** da EC2 (idealmente **Elastic IP** fixo).
+   - **Proxy status**: **DNS only** (nuvem cinzenta) se quiseres HTTPS direto na EC2 com Let’s Encrypt; **Proxied** (laranja) só se souberes configurar a origem (porta 443, certificado ou modo SSL compatível).
 
-Vai aparecer uma URL `https://...trycloudflare.com`. Use ela no app:
+2. **Se antes usavas Cloudflare Tunnel** para esse hostname:
+   - **Zero Trust → Networks → Tunnels** → abre o túnel → **Public Hostname** que apontava para `audio...` → **Remove** essa rota (ou apaga o túnel). Enquanto o hostname continuar ligado ao Tunnel, o registo **A** na zona pode ser ignorado ou conflitar com o comportamento esperado.
 
-```env
-USE_REMOTE_STT=true
-REMOTE_STT_URL=https://SEU_SUBDOMINIO.trycloudflare.com/stt/transcribe
-REMOTE_STT_TOKEN=troque-este-token
-```
+3. **AWS Security Group**: abre **443** (e **80** se usar redirect HTTP→HTTPS) para `0.0.0.0/0`; o STT em Docker escuta em **8000** só em localhost se colocares **Nginx/Caddy** à frente com reverse proxy para `127.0.0.1:8000`.
 
-### Opcao B: Tunnel nomeado (producao)
+4. No app, `REMOTE_STT_URL=https://audio.SEU_DOMINIO/stt/transcribe` (HTTPS na borda ou na VM).
 
-1. No painel Cloudflare Zero Trust, crie um Tunnel e copie o token.
-2. Coloque o token em `stt_server/.env`:
-
-```env
-CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...
-```
-
-3. Suba STT + tunnel:
-
-```bash
-cd stt_server
-docker compose --profile tunnel up -d --build
-```
-
-Ou, na raiz do repo:
-
-```bash
-docker compose --env-file stt_server/.env --profile tunnel up -d --build
-```
-
-No painel Cloudflare (ingress do túnel), a origem privada deve ser **`http://stt:8000`** (nome do serviço na rede Docker), não `http://localhost:8000`, porque o `cloudflared` roda no mesmo Compose e `localhost` seria o próprio container.
-
-### Erro no cloudflared: `context canceled` / `Incoming request ended abruptly`
-
-Isso quase sempre significa que **alguém fechou a conexão HTTP antes do STT terminar** (não é “falha do túnel” sozinho).
-
-1. **Timeout no app (Flutter)** — o cliente cancela após `REMOTE_STT_TIMEOUT_SECONDS`. Whisper em CPU na **primeira** requisição pode levar **vários minutos** (baixar/carregar modelo). Aumente no `.env` do app:
-   ```env
-   REMOTE_STT_TIMEOUT_SECONDS=300
-   ```
-   ou até `600` se precisar.
-   Também vale ativar no servidor:
-   ```env
-   PRELOAD_MODEL=true
-   ```
-   (carrega o modelo no startup, evitando primeira requisição lenta).
-
-2. **STT lento** — use `STT_QUALITY_PROFILE=fast` ou `MODEL_SIZE=base` temporariamente, ou **aqueça** o servidor com um `curl` de teste após subir o Docker (primeira transcrição carrega o modelo).
-
-3. **Origin no painel do túnel** — `http://127.0.0.1:8000` só funciona se o **cloudflared** rodar na **mesma máquina** onde a porta `8000` está publicada. Se o STT estiver só dentro de uma rede Docker sem bind na host, use o IP da bridge ou `host.docker.internal` conforme o seu setup.
-
-4. **Limites no edge Cloudflare** — requisições HTTP muito longas podem ser cortadas por políticas de timeout no proxy (varia por plano/config). Se mesmo com STT rápido ainda cancelar perto de ~100s, vale checar em **Zero Trust → o túnel → rota do hostname → configurações avançadas** (timeouts / origin) ou reduzir o tempo por requisição (`REMOTE_STT_CHUNK_SECONDS` menor no app = arquivos menores = resposta mais cedo).
-
-Você também pode aquecer manualmente o servidor (carrega o modelo sem esperar um áudio real):
+**Primeira requisição lenta / timeouts no app:** no `.env` do app Flutter, `REMOTE_STT_TIMEOUT_SECONDS=300` (ou mais); no servidor, `PRELOAD_MODEL=true`. Aquecimento opcional:
 
 ```bash
 curl -X POST -H "Authorization: Bearer SEU_TOKEN" http://127.0.0.1:8000/warmup

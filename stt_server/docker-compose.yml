@@ -44,18 +44,5 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /app/.cache/huggingface
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: ia-secretary-cloudflared
-    depends_on:
-      stt:
-        condition: service_healthy
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
-    environment:
-      CLOUDFLARE_TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    restart: unless-stopped
-    profiles:
-      - tunnel
-
 volumes:
   hf_cache:
