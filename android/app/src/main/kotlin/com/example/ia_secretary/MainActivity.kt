@@ -39,6 +39,8 @@ class MainActivity : FlutterActivity() {
     private var overlayBubbleView: View? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var windowManager: WindowManager? = null
+    /// IDs distintos para cada full-screen intent (reutilizar o mesmo id pode falhar na 2.ª ativação).
+    private var wakeNotificationSeq = 9000
 
     companion object {
         const val EXTRA_OPEN_ASSISTANT = "open_assistant"
@@ -235,7 +237,9 @@ class MainActivity : FlutterActivity() {
                     val dx = event.rawX - initialTouchX
                     val dy = event.rawY - initialTouchY
                     if (kotlin.math.abs(dx) > 10 || kotlin.math.abs(dy) > 10) moved = true
-                    p.x = initialX + dx.toInt()
+                    // Com Gravity.END, x conta a partir da direita: +x empurra para a esquerda.
+                    // Inverter dx para o arrastar acompanhar o dedo.
+                    p.x = initialX - dx.toInt()
                     p.y = initialY + dy.toInt()
                     try {
                         val bubble = overlayBubbleView
@@ -307,12 +311,21 @@ class MainActivity : FlutterActivity() {
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setAutoCancel(true)
             .build()
-        nm.notify(1, notification)
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        wakeNotificationSeq++
+        if (wakeNotificationSeq > 99999) wakeNotificationSeq = 9001
+        nm.notify(wakeNotificationSeq, notification)
+        // Reforço: em vários OEMs só a notificação não basta na 2.ª vez; tentar trazer a task (pode falhar por BAL — ignorar).
+        try {
             applicationContext.startActivity(Intent(applicationContext, MainActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
                 putExtra(EXTRA_OPEN_ASSISTANT, true)
             })
+        } catch (_: Exception) {
         }
     }
 

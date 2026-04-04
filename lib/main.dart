@@ -134,6 +134,7 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
   bool _avaSpeaking = false;
   /// Feedback visual do STT remoto (gravando / transcrevendo).
   RemoteListenUiState? _remoteListenUi;
+  Timer? _remoteRestartAfterBackgroundTimer;
 
   @override
   void initState() {
@@ -187,6 +188,7 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
 
   @override
   void dispose() {
+    _remoteRestartAfterBackgroundTimer?.cancel();
     _reminderService.stop();
     WidgetsBinding.instance.removeObserver(this);
     showAssistantFromNative.removeListener(_onShowAssistantFromNative);
@@ -200,6 +202,19 @@ class _IaSecretaryAppState extends State<IaSecretaryApp> with WidgetsBindingObse
         _signedIn &&
         _overlayGranted == false) {
       _checkOverlayPermission();
+    }
+    // STT remoto + microfone em segundo plano: após várias idas ao fundo o gravador pode ficar preso;
+    // reiniciar o loop ao pausar evita deixar de ouvir "secretária" na 2.ª minimização.
+    if (state == AppLifecycleState.paused &&
+        Platform.isAndroid &&
+        _signedIn &&
+        _voiceService.engine == 'remote') {
+      _remoteRestartAfterBackgroundTimer?.cancel();
+      _remoteRestartAfterBackgroundTimer = Timer(const Duration(milliseconds: 400), () {
+        if (!mounted || !_voiceService.isListening || _avaSpeaking) return;
+        debugLog('App', 'lifecycle paused: restart remote STT loop');
+        _voiceService.restartListening();
+      });
     }
   }
 

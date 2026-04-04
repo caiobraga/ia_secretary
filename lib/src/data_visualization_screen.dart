@@ -56,6 +56,29 @@ class _DataVisualizationScreenState extends State<DataVisualizationScreen> {
     _load();
   }
 
+  Future<void> _editEventTitle(Map<String, dynamic> e) async {
+    final id = e['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    final initial = (e['title'] as String?)?.trim() ?? '';
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _EditEventTitleDialog(initialTitle: initial),
+    );
+    if (!mounted) return;
+    if (saved == null || saved.isEmpty) return;
+    if (saved == initial) return;
+    try {
+      await Supabase.instance.client.from('events').update({'title': saved}).eq('id', id);
+      if (mounted) await _load();
+    } catch (err) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Não foi possível guardar: $err')),
+        );
+      }
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -237,25 +260,38 @@ class _DataVisualizationScreenState extends State<DataVisualizationScreen> {
     final start = e['start_time'] as String?;
     final end = e['end_time'] as String?;
     final allDay = e['all_day'] == true;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _cyan.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _cyan.withValues(alpha: 0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            e['title'] as String? ?? '—',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _editEventTitle(e),
+          borderRadius: BorderRadius.circular(12),
+          child: Ink(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _cyan.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _cyan.withValues(alpha: 0.25)),
             ),
-          ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        e['title'] as String? ?? '—',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.edit_outlined, size: 18, color: _cyan.withValues(alpha: 0.7)),
+                  ],
+                ),
           const SizedBox(height: 6),
           if (e['description'] != null && (e['description'] as String).isNotEmpty)
             Padding(
@@ -292,7 +328,10 @@ class _DataVisualizationScreenState extends State<DataVisualizationScreen> {
               ],
             ),
           ],
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -387,6 +426,66 @@ class _DataVisualizationScreenState extends State<DataVisualizationScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// O [TextEditingController] vive no estado do diálogo e só é descartado em [dispose], após a rota fechar.
+class _EditEventTitleDialog extends StatefulWidget {
+  const _EditEventTitleDialog({required this.initialTitle});
+
+  final String initialTitle;
+
+  @override
+  State<_EditEventTitleDialog> createState() => _EditEventTitleDialogState();
+}
+
+class _EditEventTitleDialogState extends State<_EditEventTitleDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialTitle);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF151b2e),
+      title: Text(
+        'Nome da reunião',
+        style: TextStyle(color: Colors.white.withValues(alpha: 0.95)),
+      ),
+      content: TextField(
+        controller: _controller,
+        style: const TextStyle(color: Colors.white),
+        cursorColor: _cyan,
+        decoration: InputDecoration(
+          hintText: 'Título',
+          hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: _cyan.withValues(alpha: 0.5)),
+          ),
+          focusedBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: _cyan),
+          ),
+        ),
+        autofocus: true,
+        textCapitalization: TextCapitalization.sentences,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Cancelar', style: TextStyle(color: Colors.white.withValues(alpha: 0.7))),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: _cyan, foregroundColor: _bgDark),
+          onPressed: () => Navigator.pop(context, _controller.text.trim()),
+          child: const Text('Guardar'),
+        ),
+      ],
     );
   }
 }
