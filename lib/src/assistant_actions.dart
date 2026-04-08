@@ -149,11 +149,13 @@ class AssistantActions {
 
       final list = await Supabase.instance.client
           .from('events')
-          .select('id, title, start_time')
+          .select('id, title, start_time, end_time')
           .eq('user_id', uid)
           .eq('status', 'scheduled')
-          .gte('start_time', startUtc)
+          // Use sobreposição em vez de só start_time: evita dizer "livre" quando existe evento
+          // que começou antes do dia (ex.: meia-noite UTC) mas continua nesse dia no horário local.
           .lt('start_time', endUtc)
+          .gt('end_time', startUtc)
           .order('start_time', ascending: true);
 
       final events = list as List;
